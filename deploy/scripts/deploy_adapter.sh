@@ -16,6 +16,7 @@ OUTPUT="$(forge script DeployAdapter \
     --rpc-url $RPC_URL \
     --json \
     --broadcast \
+    --verify \
     -s "deployAdapter(address,address,address,address)" $ADMIN $CTF $FINDER $OPTIMISTIC_ORACLE)"
 
 ADAPTER=$(echo "$OUTPUT" | grep "{" | jq -r .returns.adapter.value)
