@@ -2,8 +2,10 @@
 pragma solidity 0.8.15;
 
 import { AdapterHelper } from "./dev/AdapterHelper.sol";
+import { IERC20 } from "lib/openzeppelin-contracts/contracts/token/ERC20/IERC20.sol";
 import { IAddressWhitelist } from "src/interfaces/IAddressWhitelist.sol";
 import { IOptimisticOracleV2, Request } from "src/interfaces/IOptimisticOracleV2.sol";
+import { IConditionalTokens } from "src/interfaces/IConditionalTokens.sol";
 
 import { QuestionData } from "src/UmaCtfAdapter.sol";
 
@@ -303,6 +305,49 @@ contract UmaCtfAdapterTest is AdapterHelper {
         vm.expectEmit(true, true, true, true);
         emit QuestionResolved(questionID, price, payouts);
         adapter.resolve(questionID);
+    }
+
+    function testE2EInitializeSplitResolveRedeem() public {
+        uint256 reward = 1 ether;
+        uint256 bond = 10_000_000_000;
+        uint256 positionAmount = 100 ether;
+
+        vm.startPrank(admin);
+        dealAndApprove(usdc, admin, address(adapter), type(uint256).max);
+        vm.stopPrank();
+
+        // 1) Create a new question via the adapter.
+        vm.prank(admin);
+        adapter.initialize(ancillaryData, usdc, reward, bond, 0);
+
+        QuestionData memory data = adapter.getQuestion(questionID);
+
+        // 2) Simulate market position creation by splitting collateral into YES/NO outcomes.
+        uint256[] memory partition = new uint256[](2);
+        partition[0] = 1; // YES
+        partition[1] = 2; // NO
+
+        vm.startPrank(admin);
+        IERC20(usdc).approve(ctf, positionAmount);
+        IConditionalTokens(ctf).splitPosition(IERC20(usdc), bytes32(0), conditionId, partition, positionAmount);
+        vm.stopPrank();
+
+        // 3) Resolve through UMA OO flow.
+        proposeAndSettle(1 ether, data.requestTimestamp, data.ancillaryData);
+        adapter.resolve(questionID);
+
+        // 4) Close positions by redeeming settled outcomes back to collateral.
+        uint256[] memory indexSets = new uint256[](2);
+        indexSets[0] = 1;
+        indexSets[1] = 2;
+
+        uint256 balanceBeforeRedeem = balanceOf(usdc, admin);
+        vm.prank(admin);
+        IConditionalTokens(ctf).redeemPositions(IERC20(usdc), bytes32(0), conditionId, indexSets);
+        uint256 balanceAfterRedeem = balanceOf(usdc, admin);
+
+        assertEq(balanceAfterRedeem, balanceBeforeRedeem + positionAmount);
+        assertTrue(adapter.getQuestion(questionID).resolved);
     }
 
     function testResolveIgnorePrice() public {
